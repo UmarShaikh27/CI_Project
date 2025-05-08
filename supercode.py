@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
-from math import ceil
+from math import ceil,floor
+import matplotlib.pyplot as plt
 
 # Load the dataset
 data = pd.read_csv("supa_data.csv")
@@ -28,8 +29,8 @@ nutrient_targets = {
 nutrient_weights = {
     "Carbohydrate (g)": 0.2,
     "Protein (g)": 0.3,
-    "Total Fat (g)": 0.2,
-    "Folic acid (mcg)": 0.2,
+    "Total Fat (g)": 0.15,
+    "Folic acid (mcg)": 0.25,
     "Calcium (mg)": 0.15,
     "Iron (mg)": 0.15,
 }
@@ -58,7 +59,7 @@ def calculate_max_units(food_data, targets, max_calories):
         else:
             calorie_limit = max_calories / row["Energy (kcal)"]
         max_units.append(min(nutrient_limits + [calorie_limit]))
-    return np.array([ceil(min(max(0, u), 3)) for u in max_units])
+    return np.array([floor(min(max(0, u), 3)) for u in max_units])
 
 # Initialize sparse chromosome as list of (index, units) tuples with category diversity
 def initialize_sparse_chromosome(num_foods, max_units, max_foods=10, food_data=None, max_per_category=3):
@@ -94,7 +95,7 @@ def initialize_sparse_chromosome(num_foods, max_units, max_foods=10, food_data=N
 
 import numpy as np
 
-def select_parents(population, fitness_scores, population_size, scheme="fitness_proportional", tournament_size=3):
+def select_parents(population, fitness_scores, population_size, scheme="fps", tournament_size=3):
     """
     Select parents from the population based on the specified scheme.
     
@@ -108,7 +109,7 @@ def select_parents(population, fitness_scores, population_size, scheme="fitness_
     Returns:
         List of selected parent chromosomes (copies).
     """
-    if scheme == "fitness_proportional":
+    if scheme == "fps":
         fitness_sum = sum(fitness_scores)
         if fitness_sum == 0:
             probabilities = np.ones(population_size) / population_size
@@ -135,8 +136,70 @@ def select_parents(population, fitness_scores, population_size, scheme="fitness_
     
     return [population[i].copy() for i in parent_indices]
 
+def select_survivors(population, offspring, fitness_scores, population_size, scheme="elitist", tournament_size=3, elite_size=1):
+    """
+    Select survivors for the next generation from population and offspring.
+    
+    Args:
+        population: List of current population chromosomes.
+        offspring: List of offspring chromosomes.
+        fitness_scores: List of fitness scores for combined population + offspring.
+        population_size: Number of survivors to select.
+        scheme: Selection scheme ("elitist", "tournament", "age").
+        tournament_size: Number of individuals in each tournament (for tournament selection).
+        elite_size: Number of best individuals to preserve (for age-based selection).
+    
+    Returns:
+        List of selected survivor chromosomes (copies).
+    """
+    combined = population + offspring
+    if scheme == "elitist":
+        indices = np.argsort(fitness_scores)[::-1][:population_size]
+        return [combined[i].copy() for i in indices]
+    
+    elif scheme == "tournament":
+        survivor_indices = []
+        for _ in range(population_size):
+            tournament_indices = np.random.choice(range(len(combined)), size=tournament_size, replace=False)
+            tournament_fitness = [fitness_scores[i] for i in tournament_indices]
+            winner = tournament_indices[np.argmax(tournament_fitness)]
+            survivor_indices.append(winner)
+        return [combined[i].copy() for i in survivor_indices]
+    
+    elif scheme == "age":
+        # Preserve elite_size best individuals
+        elite_indices = np.argsort(fitness_scores)[::-1][:elite_size]
+        elite = [combined[i].copy() for i in elite_indices]
+        # Fill with offspring (newest individuals)
+        remaining = offspring[:population_size - elite_size]
+        return elite + [chrom.copy() for chrom in remaining]
+    
+    else:
+        raise ValueError(f"Unknown survivor selection scheme: {scheme}")
+
+def plot_fitness_history(generations,best_fitness_history, avg_fitness_history):
+    """
+    Plot best and average fitness over generations.
+    
+    Args:
+        best_fitness_history: List of best fitness scores per generation.
+        avg_fitness_history: List of average fitness scores per generation.
+        generations: Number of generations.
+    """
+    plt.figure(figsize=(10, 6))
+    generations_range = range(1, generations + 1)
+    plt.plot(generations_range, best_fitness_history, label='Best Fitness', color='blue', linewidth=2)
+    plt.plot(generations_range, avg_fitness_history, label='Average Fitness', color='orange', linestyle='--', linewidth=2)
+    plt.xlabel('Generation')
+    plt.ylabel('Fitness Score')
+    plt.title('Best and Average Fitness Over Generations')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
 # Fitness function with sparsity and diversity penalties
-def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=2, sparsity_penalty=0.5, diversity_penalty=1.0):
+def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=10, sparsity_penalty=0.5, diversity_penalty=1.0):
     fitness = 100.0
     total_calories = 0
     nutrient_totals = {nutrient: 0 for nutrient in targets}
@@ -295,17 +358,18 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
     return chromosome
 
 # Genetic Algorithm
-def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_category=3, population_size=100, generations=80, mutation_rate=0.1, eta_c=15,parent_selection_scheme="tournament",):
+def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_category=3, population_size=200, generations=50, parent_selection_scheme="fps",survivor_selection_scheme="elitist",mutation_rate=0.1, eta_c=15):
+    tournament_size=3;
+    elite_size=1;
     num_foods = len(food_data)
     max_units = calculate_max_units(food_data, targets, max_calories)
-    
+    best_fitness_history = []
+    avg_fitness_history = []
     # Initialize population
     population = [
         initialize_sparse_chromosome(num_foods, max_units, max_foods, food_data, max_per_category)
         for _ in range(population_size)
     ]
-
-    # return
     
     
     for generation in range(generations):
@@ -315,7 +379,10 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
             for chrom in population
         ]
         
-       
+        best_fitness = max(fitness_scores)
+        avg_fitness = np.mean(fitness_scores)
+        best_fitness_history.append(best_fitness)
+        avg_fitness_history.append(avg_fitness)
         # # Select parents
         # fitness_sum = sum(fitness_scores)
 
@@ -356,30 +423,40 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
         
         
 
-        # Combine and select top N
-        combined = population + offspring
-        fitness_scores = [
+        # Select survivors
+        combined_fitness = [
             calculate_fitness(chrom, food_data, targets, max_calories, max_foods, diversity_penalty=1.0)
-            for chrom in combined
+            for chrom in population + offspring
         ]
-        indices = np.argsort(fitness_scores)[::-1][:population_size]
-        population = [combined[i].copy() for i in indices]
+        population = select_survivors(
+            population, 
+            offspring, 
+            combined_fitness, 
+            population_size, 
+            scheme=survivor_selection_scheme, 
+            tournament_size=tournament_size,
+            elite_size=elite_size
+        )
         
         # Log progress
         best_fitness = max(fitness_scores)
         # print("\nBEST FITNESS THIS GEN: ", best_fitness)
         if generation % 10 == 0:
-            print(f"Generation {generation}: Best Fitness = {best_fitness:.2f}")
+            print(f"Generation {generation}: Best Fitness = {best_fitness:.2f} Avg Fitness = {avg_fitness:.2f}")
+            best_idx = np.argmax(fitness_scores)
+            best_fitness = fitness_scores[best_idx]
+            best_chrom = population[best_idx]
+            # print(best_chrom)
     
     # Return best chromosome
     best_idx = np.argmax([
         calculate_fitness(chrom, food_data, targets, max_calories, max_foods, diversity_penalty=1.0)
         for chrom in population
     ])
-    return population[best_idx]
+    return population[best_idx] ,best_fitness_history,avg_fitness_history
 
 # Interpret and display dietary plan
-def interpret_diet_plan(chromosome, food_data, targets, max_calories):
+def interpret_diet_plan(chromosome, food_data, targets, max_calories, max_foods):
     total_nutrients = {nutrient: 0 for nutrient in targets}
     total_calories = 0
     plan = []
@@ -407,21 +484,29 @@ def interpret_diet_plan(chromosome, food_data, targets, max_calories):
             print(f"{nutrient}: {value:.1f} (Target: {target[0]}-{target[1]})")
         else:
             print(f"{nutrient}: {value:.1f} (Target: {target})")
-    print(f"\nFitness Score: {calculate_fitness(chromosome, food_data, targets, max_calories):.2f}")
+    print(f"\nFitness Score: {calculate_fitness(chromosome, food_data, targets, max_calories,max_foods):.2f}")
 
 # Main execution
 def main():
     # weight = float(input("Enter weight in kg: "))
     weight = 60
     max_calories = weight * 24
-    max_foods = 5
+    max_foods = 8
     max_per_category = 3
+    parent_selection_scheme="fps"
+    survivor_selection_scheme="tournament"
+    generations=100
+    population_size=100
+    mutation_rate=0.1
+    eta_c=15
     
     # Run genetic algorithm
-    best_plan = genetic_algorithm(data, nutrient_targets, max_calories, max_foods, max_per_category)
+    best_plan,best_fitness_history, avg_fitness_history = genetic_algorithm(data, nutrient_targets, max_calories, max_foods,max_per_category, population_size,generations, parent_selection_scheme, survivor_selection_scheme, mutation_rate, eta_c)
+    print("BEST PLAN: ", best_plan)
     
     # Interpret and display results
-    interpret_diet_plan(best_plan, data, nutrient_targets, max_calories)
+    interpret_diet_plan(best_plan, data, nutrient_targets, max_calories, max_foods)
+    plot_fitness_history(generations, best_fitness_history, avg_fitness_history)
 
 if __name__ == "__main__":
     main()
