@@ -34,6 +34,10 @@ nutrient_weights = {
     "Iron (mg)": 0.15,
 }
 
+# Get unique categories
+categories = data["Ultimate Category"].values
+unique_categories = np.unique(categories)
+
 # Calculate maximum units per food item
 def calculate_max_units(food_data, targets, max_calories):
     max_units = []
@@ -57,16 +61,12 @@ def calculate_max_units(food_data, targets, max_calories):
     return np.array([ceil(min(max(0, u), 3)) for u in max_units])
 
 # Initialize sparse chromosome as list of (index, units) tuples with category diversity
-def initialize_sparse_chromosome(num_foods, max_units, max_foods=8, food_data=None, max_per_category=3):
-    # Get unique categories
-    categories = food_data["Ultimate Category"].values
-    unique_categories = np.unique(categories)
+def initialize_sparse_chromosome(num_foods, max_units, max_foods=10, food_data=None, max_per_category=3):
     
     # Initialize empty chromosome
     chromosome = []
     selected_indices = []
     category_counts = {cat: 0 for cat in unique_categories}
-    
     # Select max_foods items, respecting category limits
     while len(chromosome) < max_foods:
         # Candidates: foods not yet selected and whose category isn't over limit
@@ -88,9 +88,52 @@ def initialize_sparse_chromosome(num_foods, max_units, max_foods=8, food_data=No
         food_name = food_data.iloc[idx]["Main food description"]
         formatted.append(f"{food_name}: {units} units")
 
-    print("\nChromosome: ", formatted)
-    print(len(chromosome))
+    # print("\nChromosome: ", formatted)
+    # print(len(chromosome))
     return chromosome
+
+import numpy as np
+
+def select_parents(population, fitness_scores, population_size, scheme="fitness_proportional", tournament_size=3):
+    """
+    Select parents from the population based on the specified scheme.
+    
+    Args:
+        population: List of chromosomes (lists of (index, units) tuples).
+        fitness_scores: List of fitness scores for each chromosome.
+        population_size: Number of parents to select.
+        scheme: Selection scheme ("fitness_proportional", "tournament", "rank").
+        tournament_size: Number of individuals in each tournament (for tournament selection).
+    
+    Returns:
+        List of selected parent chromosomes (copies).
+    """
+    if scheme == "fitness_proportional":
+        fitness_sum = sum(fitness_scores)
+        if fitness_sum == 0:
+            probabilities = np.ones(population_size) / population_size
+        else:
+            probabilities = [f / fitness_sum for f in fitness_scores]
+        parent_indices = np.random.choice(range(population_size), size=population_size, p=probabilities)
+    
+    elif scheme == "tournament":
+        parent_indices = []
+        for _ in range(population_size):
+            tournament_indices = np.random.choice(range(population_size), size=tournament_size, replace=False)
+            tournament_fitness = [fitness_scores[i] for i in tournament_indices]
+            winner = tournament_indices[np.argmax(tournament_fitness)]
+            parent_indices.append(winner)
+    
+    elif scheme == "rank":
+        ranks = np.argsort(np.argsort(fitness_scores)) + 1  # Ranks: 1 (worst) to population_size (best)
+        rank_sum = sum(ranks)
+        probabilities = [r / rank_sum for r in ranks]
+        parent_indices = np.random.choice(range(population_size), size=population_size, p=probabilities)
+    
+    else:
+        raise ValueError(f"Unknown parent selection scheme: {scheme}")
+    
+    return [population[i].copy() for i in parent_indices]
 
 # Fitness function with sparsity and diversity penalties
 def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=2, sparsity_penalty=0.5, diversity_penalty=1.0):
@@ -243,7 +286,7 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
         if valid_indices:
             idx = np.random.choice(valid_indices)
             units = np.random.randint(1, max_units[idx] + 1)
-            chromosome.append((idx, units))
+            chromosome.append((int(idx), units))
     
     # Remove excess items if over max_foods
     if len(chromosome) > max_foods:
@@ -252,7 +295,7 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
     return chromosome
 
 # Genetic Algorithm
-def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_category=3, population_size=10, generations=10, mutation_rate=0.1, eta_c=15):
+def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_category=3, population_size=100, generations=80, mutation_rate=0.1, eta_c=15,parent_selection_scheme="tournament",):
     num_foods = len(food_data)
     max_units = calculate_max_units(food_data, targets, max_calories)
     
@@ -272,16 +315,26 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
             for chrom in population
         ]
         
-        print("Fitness scores:", fitness_scores)
-        # Select parents
-        fitness_sum = sum(fitness_scores)
-        if fitness_sum == 0:
-            probabilities = np.ones(population_size) / population_size
-        else:
-            probabilities = [f / fitness_sum for f in fitness_scores]
-        parent_indices = np.random.choice(range(population_size), size=population_size, p=probabilities)
-        parents = [population[i].copy() for i in parent_indices]
+       
+        # # Select parents
+        # fitness_sum = sum(fitness_scores)
+
+        # if fitness_sum == 0:
+        #     probabilities = np.ones(population_size) / population_size
+        # else:
+        #     probabilities = [f / fitness_sum for f in fitness_scores]
+    
+        # parent_indices = np.random.choice(range(population_size), size=population_size, p=probabilities)
+        # parents = [population[i].copy() for i in parent_indices]
         
+        parents = select_parents(
+            population, 
+            fitness_scores, 
+            population_size, 
+            scheme=parent_selection_scheme, 
+            tournament_size=5
+        )
+
         # Generate offspring
         offspring = []
         for i in range(0, population_size, 2):
@@ -289,9 +342,11 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
                 child1, child2 = sbx_crossover(
                     parents[i], parents[i+1], max_units, max_foods, food_data, max_per_category, eta_c
                 )
+                
                 offspring.extend([child1, child2])
             else:
                 offspring.append(parents[i])
+
         
         # Apply mutation
         offspring = [
@@ -299,6 +354,8 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
             for chrom in offspring
         ]
         
+        
+
         # Combine and select top N
         combined = population + offspring
         fitness_scores = [
@@ -310,6 +367,7 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
         
         # Log progress
         best_fitness = max(fitness_scores)
+        # print("\nBEST FITNESS THIS GEN: ", best_fitness)
         if generation % 10 == 0:
             print(f"Generation {generation}: Best Fitness = {best_fitness:.2f}")
     
