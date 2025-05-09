@@ -2,9 +2,10 @@ import pandas as pd
 import numpy as np
 from math import ceil,floor
 import matplotlib.pyplot as plt
+from collections import defaultdict
 
 # Load the dataset
-data = pd.read_csv("supa_data.csv")
+data = pd.read_csv("Supadupa_data.csv")
 
 # Verify expected columns
 expected_columns = [
@@ -28,11 +29,11 @@ nutrient_targets = {
 # Nutrient weights
 nutrient_weights = {
     "Carbohydrate (g)": 0.2,
-    "Protein (g)": 0.3,
+    "Protein (g)": 0.25,
     "Total Fat (g)": 0.15,
     "Folic acid (mcg)": 0.25,
     "Calcium (mg)": 0.15,
-    "Iron (mg)": 0.15,
+    "Iron (mg)": 0.2,
 }
 
 # Get unique categories
@@ -43,23 +44,19 @@ unique_categories = np.unique(categories)
 def calculate_max_units(food_data, targets, max_calories):
     max_units = []
     for _, row in food_data.iterrows():
-        nutrient_limits = []
-        for nutrient, target in targets.items():
-            nutrient_value = row[nutrient] if nutrient in row else 0
-            if nutrient_value == 0:
-                nutrient_limits.append(float('inf'))
-            else:
-                if isinstance(target, tuple):
-                    target_value = target[1]
-                else:
-                    target_value = target
-                nutrient_limits.append(target_value / nutrient_value)
-        if row["Energy (kcal)"] == 0:
-            calorie_limit = float('inf')
+        nutrient_limits = [
+            targets[nutrient] / row[nutrient]
+            for nutrient in targets
+            if isinstance(targets[nutrient], (int, float)) and row[nutrient] > 0.01  # Avoid division by near-zero
+        ]
+        calorie_limit = max_calories / row["Energy (kcal)"] if row["Energy (kcal)"] > 0 else float("inf")
+        if not nutrient_limits:  # Handle foods with no valid nutrient contributions
+            max_unit = 1  # Default to 1 unit if no nutrient constraints
         else:
-            calorie_limit = max_calories / row["Energy (kcal)"]
-        max_units.append(min(nutrient_limits + [calorie_limit]))
-    return np.array([floor(min(max(0, u), 3)) for u in max_units])
+            max_unit = int(np.floor(min(nutrient_limits + [calorie_limit, 3])))
+        max_unit = max(max_unit, 1)  # Ensure at least 1 unit
+        max_units.append(max_unit)
+    return max_units
 
 # Initialize sparse chromosome as list of (index, units) tuples with category diversity
 def initialize_sparse_chromosome(num_foods, max_units, max_foods=10, food_data=None, max_per_category=3):
@@ -200,55 +197,67 @@ def plot_fitness_history(generations,best_fitness_history, avg_fitness_history):
 
 # Fitness function with sparsity and diversity penalties
 def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=10, sparsity_penalty=0.5, diversity_penalty=1.0):
-    fitness = 100.0
-    total_calories = 0
     nutrient_totals = {nutrient: 0 for nutrient in targets}
+    total_calories = 0
+    category_counts = defaultdict(int)
     
-    # Track categories for diversity
-    categories = []
-    num_foods_selected = len(chromosome)
-    
-    # Calculate nutrient totals
+    # Calculate nutrient and calorie totals
     for idx, units in chromosome:
         row = food_data.iloc[idx]
-        total_calories += units * row["Energy (kcal)"]
-        categories.append(row["Ultimate Category"])
         for nutrient in targets:
-            nutrient_value = row[nutrient] if nutrient in row else 0
-            nutrient_totals[nutrient] += units * nutrient_value
+            nutrient_totals[nutrient] += units * row[nutrient]
+        total_calories += units * row["Energy (kcal)"]
+        category = row["Ultimate Category"]
+        category_counts[category] += 1
     
-    # Penalize if calories exceed max_calories
-    if total_calories > max_calories:
-        # print("\ntotal calories: -->", total_calories)
-        # print("max calories: -->", max_calories)
-        return 0
+    # Base fitness score
+    fitness = 100.0    
     
-    # Penalize excessive food items
-    if num_foods_selected > max_foods:
-        fitness -= sparsity_penalty * (num_foods_selected - max_foods)
-    
-    # Penalize low category diversity (fewer unique categories than desired)
-    unique_categories = len(set(categories))
-    min_categories = min(3, num_foods_selected)  # Expect at least 3 categories or num foods
-    if unique_categories < min_categories:
-        fitness -= diversity_penalty * (min_categories - unique_categories)
-    
-    # Calculate nutrient deviations
     for nutrient, target in targets.items():
         actual = nutrient_totals[nutrient]
+        # Handle range targets (e.g., Total Fat (45, 78))
         if isinstance(target, tuple):
-            min_target, max_target = target
-            if actual < min_target:
-                deviation = (min_target - actual) / min_target
-            elif actual > max_target:
-                deviation = (actual - max_target) / max_target
-            else:
-                deviation = 0
+            target_mid = (target[0] + target[1]) / 2
+            target_range = target[1] - target[0]
+            deviation = abs(actual - target_mid) / target_mid
         else:
-            deviation = abs(actual - target) / target if target != 0 else 0
-        fitness -= deviation * nutrient_weights[nutrient] * 25
+            deviation = abs(actual - target) / target
+        
+        # Penalty capped at 25 points per nutrient
+        penalty = min(deviation * 25, 25)
+        weight = nutrient_weights.get(nutrient, 0.3)
+        fitness -= weight * penalty
     
-    return max(0, fitness)
+    # Calorie penalty
+    calorie_deviation = abs(total_calories - max_calories) / max_calories
+    if calorie_deviation <= 0.1:
+        # Moderate penalty for deviations within 10%
+        calorie_penalty = min(calorie_deviation * 25, 25)
+    else:
+        # Heavier penalty for deviations > 10%
+        calorie_penalty = min(calorie_deviation * 50, 50)
+    calorie_weight = 0.4  # Emphasize calorie adherence
+    fitness -= calorie_weight * calorie_penalty
+    
+    # Constraint penalties
+    if len(chromosome) > max_foods:
+        fitness -= 10 * (len(chromosome) - max_foods)  # Penalize excess foods
+    
+    max_per_category = 3
+    for category, count in category_counts.items():
+        if count > max_per_category:
+            fitness -= 10 * (count - max_per_category)  # Penalize category overages
+    
+    # Diversity penalty (if applicable)
+    if diversity_penalty > 0:
+        unique_foods = len(chromosome)
+        diversity_score = max(0, 10 - unique_foods)  # Encourage up to 10 foods
+        fitness -= diversity_penalty * diversity_score
+    
+    # Ensure fitness is non-negative
+    fitness = max(fitness, 0)
+    
+    return fitness
 
 # SBX crossover for tuple-based chromosomes
 def sbx_crossover(parent1, parent2, max_units, max_foods=10, food_data=None, max_per_category=3, eta_c=15):
@@ -493,10 +502,10 @@ def main():
     max_calories = weight * 24
     max_foods = 8
     max_per_category = 3
-    parent_selection_scheme="fps"
-    survivor_selection_scheme="tournament"
+    parent_selection_scheme="rank"
+    survivor_selection_scheme="elitist"
     generations=100
-    population_size=100
+    population_size=500
     mutation_rate=0.1
     eta_c=15
     
