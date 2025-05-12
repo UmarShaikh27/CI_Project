@@ -76,7 +76,7 @@ def initialize_sparse_chromosome(num_foods, max_units, max_foods=10, food_data=N
         if not valid_indices:
             break  # No more valid items
         idx = np.random.choice(valid_indices)
-        units = np.random.randint(1, max_units[idx] + 1)
+        units = round(np.random.uniform(1, max_units[idx] + 1),1)
         chromosome.append((int(idx), units))
         selected_indices.append(idx)
         category_counts[categories[idx]] += 1
@@ -174,7 +174,7 @@ def select_survivors(population, offspring, fitness_scores, population_size, sch
     else:
         raise ValueError(f"Unknown survivor selection scheme: {scheme}")
 
-def plot_fitness_history(generations,best_fitness_history, avg_fitness_history):
+def plot_fitness_history(generations,best_fitness_history, avg_fitness_history,file_path="fitness_progress.png"):
     """
     Plot best and average fitness over generations.
     
@@ -193,7 +193,9 @@ def plot_fitness_history(generations,best_fitness_history, avg_fitness_history):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
+    plt.savefig(file_path, dpi=300)
     plt.show()
+    print(f"Fitness progress graph saved to {file_path}")
 
 # Fitness function with sparsity and diversity penalties
 def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=10, sparsity_penalty=0.5, diversity_penalty=1.0):
@@ -321,7 +323,7 @@ def sbx_crossover(parent1, parent2, max_units, max_foods=10, food_data=None, max
             if not valid_indices:
                 break
             idx = np.random.choice(valid_indices)
-            units = np.random.randint(1, max_units[idx] + 1)
+            units = round(np.random.uniform(1, max_units[idx] + 1),1)
             offspring.append((idx, units))
             counts[categories[idx]] += 1
     
@@ -339,7 +341,7 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
     # Mutate units of existing items
     for i, (idx, units) in enumerate(chromosome):
         if np.random.random() < mutation_rate:
-            new_units = np.random.randint(0, max_units[idx] + 1)
+            new_units = round(np.random.uniform(1, max_units[idx] + 1),1)
             if new_units == 0:
                 chromosome.pop(i)
             else:
@@ -357,7 +359,7 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
         ]
         if valid_indices:
             idx = np.random.choice(valid_indices)
-            units = np.random.randint(1, max_units[idx] + 1)
+            units = round(np.random.uniform(1, max_units[idx] + 1),1)
             chromosome.append((int(idx), units))
     
     # Remove excess items if over max_foods
@@ -367,9 +369,10 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
     return chromosome
 
 # Genetic Algorithm
-def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_category=3, population_size=200, generations=50, parent_selection_scheme="fps",survivor_selection_scheme="elitist",mutation_rate=0.1, eta_c=15):
+def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_category=3, population_size=200, generations=10, parent_selection_scheme="fps",survivor_selection_scheme="elitist",mutation_rate=0.1, eta_c=15):
     tournament_size=3;
     elite_size=1;
+    decay_factor = 0.2
     num_foods = len(food_data)
     max_units = calculate_max_units(food_data, targets, max_calories)
     best_fitness_history = []
@@ -383,6 +386,7 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
     
     for generation in range(generations):
         # Calculate fitness
+        mutation_rate = mutation_rate * np.exp(-decay_factor * (generation / generations))
         fitness_scores = [
             calculate_fitness(chrom, food_data, targets, max_calories, max_foods, diversity_penalty=1.0)
             for chrom in population
@@ -480,42 +484,110 @@ def interpret_diet_plan(chromosome, food_data, targets, max_calories, max_foods)
             total_nutrients[nutrient] += units * nutrient_value
         plan.append((row["Main food description"], units, row["Energy (kcal)"] * units, row["Ultimate Category"]))
     
-    print("\nOptimized Dietary Plan:")
-    print("----------------------")
-    for food, units, cals, category in plan:
-        print(f"{food}: {units} units ({cals:.1f} kcal) [Category: {category}]")
-    print(f"\nTotal Calories: {total_calories:.1f} kcal (Max: {max_calories})")
-    print(f"Unique Categories: {len(set(categories))} ({set(categories)})")
-    print("\nNutrient Breakdown:")
-    for nutrient, value in total_nutrients.items():
-        target = targets[nutrient]
-        if isinstance(target, tuple):
-            print(f"{nutrient}: {value:.1f} (Target: {target[0]}-{target[1]})")
-        else:
-            print(f"{nutrient}: {value:.1f} (Target: {target})")
-    print(f"\nFitness Score: {calculate_fitness(chromosome, food_data, targets, max_calories,max_foods):.2f}")
+    return plan, total_nutrients, total_calories
+    # print("\nOptimized Dietary Plan:")
+    # print("----------------------")
+    # for food, units, cals, category in plan:
+    #     print(f"{food}: {units} units ({cals:.1f} kcal) [Category: {category}]")
+    # print(f"\nTotal Calories: {total_calories:.1f} kcal (Max: {max_calories})")
+    # print(f"Unique Categories: {len(set(categories))} ({set(categories)})")
+    # print("\nNutrient Breakdown:")
+    # for nutrient, value in total_nutrients.items():
+    #     target = targets[nutrient]
+    #     if isinstance(target, tuple):
+    #         print(f"{nutrient}: {value:.1f} (Target: {target[0]}-{target[1]})")
+    #     else:
+    #         print(f"{nutrient}: {value:.1f} (Target: {target})")
+    # print(f"\nFitness Score: {calculate_fitness(chromosome, food_data, targets, max_calories,max_foods):.2f}")
+
+# Save top 3 plans to memory
+
+
+def save_top_3_plans(plans, nutrient_targets):     
+    for rank, (plan, _, _) in enumerate(plans, start=1):
+        meal_data = []
+        nutrient_totals = {key: 0 for key in nutrient_targets}
+        total_calories = 0.0
+        
+        for item, units, cals, category in plan:
+            # Extract individual nutrient values for this item
+            row = data[data["Main food description"] == item].iloc[0]
+            item_nutrients = {nutrient: units * row[nutrient] for nutrient in nutrient_targets}
+            
+            # Add the item data to the meal plan
+            meal_data.append({
+                "Rank": rank,
+                "Food Item": item,
+                "Units": units,
+                "Calories": cals,
+                "Category": category,
+                **item_nutrients
+            })
+            total_calories += cals
+            # Update nutrient totals
+            for nutrient, value in item_nutrients.items():
+                nutrient_totals[nutrient] += value
+        
+        # Create total row for this rank
+        total_row = {
+            "Rank": f"Total for Plan {rank}",
+            "Food Item": "All Items in Plan",
+            "Units": "-",
+            "Calories": f"{total_calories:.1f}",
+            "Category": "-"
+        }
+        for nutrient, target in nutrient_targets.items():
+            total_row[nutrient] = f"{nutrient_totals.get(nutrient, 0):.1f}"
+        meal_data.append(total_row)
+    
+        # Convert to DataFrame and save each plan separately
+        df = pd.DataFrame(meal_data)
+        file_name = f"Top_Meal_Plan_{rank}.xlsx"
+        df.to_excel(file_name, index=False)
+        print(f"Plan {rank} with totals saved to {file_name}.")
+
+    
+    # print("Top 3 meal plans with nutrient totals and targets saved to memory.")
+    #df.to_excel("Top_3_Meal_Plans_with_Totals.xlsx", index=False)
+
+
+# Decaying mutation rate function
+
+
+
+
 
 # Main execution
 def main():
-    # weight = float(input("Enter weight in kg: "))
-    weight = 60
+    weight = 80
     max_calories = weight * 24
-    max_foods = 8
-    max_per_category = 3
-    parent_selection_scheme="rank"
-    survivor_selection_scheme="elitist"
-    generations=100
-    population_size=500
-    mutation_rate=0.1
-    eta_c=15
+    max_foods = 10
+    max_per_category = 2
+    parent_selection_scheme = "rank"
+    survivor_selection_scheme = "elitist"
+    generations = 1000
+    population_size = 200
+    initial_mutation_rate = 0.5
+    eta_c = 15
     
     # Run genetic algorithm
-    best_plan,best_fitness_history, avg_fitness_history = genetic_algorithm(data, nutrient_targets, max_calories, max_foods,max_per_category, population_size,generations, parent_selection_scheme, survivor_selection_scheme, mutation_rate, eta_c)
-    print("BEST PLAN: ", best_plan)
+    best_plan, best_fitness_history, avg_fitness_history = genetic_algorithm(
+        data, nutrient_targets, max_calories, max_foods, max_per_category, population_size, generations, parent_selection_scheme, survivor_selection_scheme, initial_mutation_rate, eta_c
+    )
     
-    # Interpret and display results
-    interpret_diet_plan(best_plan, data, nutrient_targets, max_calories, max_foods)
+    # Extract final plans from the best chromosome
+    plans = []
+    for i in range(3):
+        plan, nutrients, calories = interpret_diet_plan(best_plan, data, nutrient_targets, max_calories, max_foods)
+        plans.append((plan, nutrients, calories))
+    
+    
+    #plot and save fitness progress
     plot_fitness_history(generations, best_fitness_history, avg_fitness_history)
+    
+    # Save the top 3 plans to separate Excel files
+    save_top_3_plans(plans, nutrient_targets)
+    print("Top 3 meal plans with totals saved as separate Excel files.")
 
 if __name__ == "__main__":
     main()
