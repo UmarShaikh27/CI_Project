@@ -53,18 +53,17 @@ def calculate_max_units(food_data, targets, max_calories):
         if not nutrient_limits:  # Handle foods with no valid nutrient contributions
             max_unit = 1  # Default to 1 unit if no nutrient constraints
         else:
-            max_unit = int(np.floor(min(nutrient_limits + [calorie_limit, 3])))
+            max_unit = int(np.floor(min(nutrient_limits + [calorie_limit, 3]))) #Capped to maximum of 3 units
         max_unit = max(max_unit, 1)  # Ensure at least 1 unit
         max_units.append(max_unit)
     return max_units
 
-# Initialize sparse chromosome as list of (index, units) tuples with category diversity
+# Initialize chromosome as a list of (index, units) tuples 
 def initialize_sparse_chromosome(num_foods, max_units, max_foods=10, food_data=None, max_per_category=3):
-    
     # Initialize empty chromosome
     chromosome = []
     selected_indices = []
-    category_counts = {cat: 0 for cat in unique_categories}
+    category_counts = {cat: 0 for cat in unique_categories} #items selected from each category(initialized with 0)
     # Select max_foods items, respecting category limits
     while len(chromosome) < max_foods:
         # Candidates: foods not yet selected and whose category isn't over limit
@@ -75,27 +74,18 @@ def initialize_sparse_chromosome(num_foods, max_units, max_foods=10, food_data=N
         ]
         if not valid_indices:
             break  # No more valid items
-        idx = np.random.choice(valid_indices)
-        units = round(np.random.uniform(1, max_units[idx] + 1),1)
+        idx = np.random.choice(valid_indices) #randomly select a valid item
+        units = round(np.random.uniform(1, max_units[idx]),1) #select units to add(with increments of 0.1)
         chromosome.append((int(idx), units))
         selected_indices.append(idx)
         category_counts[categories[idx]] += 1
     
-    formatted = []
-    for idx, units in chromosome:
-        food_name = food_data.iloc[idx]["Main food description"]
-        formatted.append(f"{food_name}: {units} units")
-
-    # print("\nChromosome: ", formatted)
-    # print(len(chromosome))
     return chromosome
 
-import numpy as np
 
 def select_parents(population, fitness_scores, population_size, scheme="fps", tournament_size=3):
     """
     Select parents from the population based on the specified scheme.
-    
     Args:
         population: List of chromosomes (lists of (index, units) tuples).
         fitness_scores: List of fitness scores for each chromosome.
@@ -117,7 +107,7 @@ def select_parents(population, fitness_scores, population_size, scheme="fps", to
     elif scheme == "tournament":
         parent_indices = []
         for _ in range(population_size):
-            tournament_indices = np.random.choice(range(population_size), size=tournament_size, replace=False)
+            tournament_indices = np.random.choice(range(population_size), size=tournament_size, replace=False) #select participating chromosomes
             tournament_fitness = [fitness_scores[i] for i in tournament_indices]
             winner = tournament_indices[np.argmax(tournament_fitness)]
             parent_indices.append(winner)
@@ -136,7 +126,6 @@ def select_parents(population, fitness_scores, population_size, scheme="fps", to
 def select_survivors(population, offspring, fitness_scores, population_size, scheme="elitist", tournament_size=3, elite_size=1):
     """
     Select survivors for the next generation from population and offspring.
-    
     Args:
         population: List of current population chromosomes.
         offspring: List of offspring chromosomes.
@@ -165,7 +154,7 @@ def select_survivors(population, offspring, fitness_scores, population_size, sch
     
     elif scheme == "age":
         # Preserve elite_size best individuals
-        elite_indices = np.argsort(fitness_scores)[::-1][:elite_size]
+        elite_indices = np.argsort(fitness_scores)[::-1][:elite_size] #keep the fittest chromosome
         elite = [combined[i].copy() for i in elite_indices]
         # Fill with offspring (newest individuals)
         remaining = offspring[:population_size - elite_size]
@@ -215,12 +204,12 @@ def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=10
     # Base fitness score
     fitness = 100.0    
     
+    #penalize based on nutrients
     for nutrient, target in targets.items():
         actual = nutrient_totals[nutrient]
-        # Handle range targets (e.g., Total Fat (45, 78))
+        # Handle range targets
         if isinstance(target, tuple):
             target_mid = (target[0] + target[1]) / 2
-            target_range = target[1] - target[0]
             deviation = abs(actual - target_mid) / target_mid
         else:
             deviation = abs(actual - target) / target
@@ -230,7 +219,7 @@ def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=10
         weight = nutrient_weights.get(nutrient, 0.3)
         fitness -= weight * penalty
     
-    # Calorie penalty
+    # penalize based on calories
     calorie_deviation = abs(total_calories - max_calories) / max_calories
     if calorie_deviation <= 0.1:
         # Moderate penalty for deviations within 10%
@@ -239,7 +228,7 @@ def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=10
         # Heavier penalty for deviations > 10%
         calorie_penalty = min(calorie_deviation * 50, 50)
     calorie_weight = 0.4  # Emphasize calorie adherence
-    fitness -= calorie_weight * calorie_penalty
+    fitness -= calorie_weight*calorie_penalty
     
     # Constraint penalties
     if len(chromosome) > max_foods:
@@ -253,12 +242,11 @@ def calculate_fitness(chromosome, food_data, targets, max_calories, max_foods=10
     # Diversity penalty (if applicable)
     if diversity_penalty > 0:
         unique_foods = len(chromosome)
-        diversity_score = max(0, 10 - unique_foods)  # Encourage up to 10 foods
+        diversity_score = max(0, 7 - unique_foods)  # Encourage up to 7 foods
         fitness -= diversity_penalty * diversity_score
     
     # Ensure fitness is non-negative
     fitness = max(fitness, 0)
-    
     return fitness
 
 # SBX crossover for tuple-based chromosomes
@@ -282,6 +270,7 @@ def sbx_crossover(parent1, parent2, max_units, max_foods=10, food_data=None, max
     
     # Perform SBX on units for shared indices
     for idx in selected_indices:
+        #if the index is in both parents and category limits are not exceeded.
         if idx in indices1 and idx in indices2 and category_counts1[categories[idx]] < max_per_category and category_counts2[categories[idx]] < max_per_category:
             units1 = next(u for i, u in parent1 if i == idx)
             units2 = next(u for i, u in parent2 if i == idx)
@@ -304,10 +293,13 @@ def sbx_crossover(parent1, parent2, max_units, max_foods=10, food_data=None, max
                 if u2 > 0:
                     offspring2.append((idx, u2))
                     category_counts2[categories[idx]] += 1
+        #With 50% probability, inherits the food and units from parent1 if category limits allow.
         elif idx in indices1 and category_counts1[categories[idx]] < max_per_category and np.random.random() < 0.5:
             units = next(u for i, u in parent1 if i == idx)
             offspring1.append((idx, units))
             category_counts1[categories[idx]] += 1
+
+        #With 50% probability, inherits the food and units from parent2 if category limits allow.
         elif idx in indices2 and category_counts2[categories[idx]] < max_per_category and np.random.random() < 0.5:
             units = next(u for i, u in parent2 if i == idx)
             offspring2.append((idx, units))
@@ -338,7 +330,7 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
     categories = food_data["Ultimate Category"].values
     chromosome = chromosome.copy()
     
-    # Mutate units of existing items
+    # For each food, with probability mutation_rate, assign new random units
     for i, (idx, units) in enumerate(chromosome):
         if np.random.random() < mutation_rate:
             new_units = round(np.random.uniform(1, max_units[idx] + 1),1)
@@ -347,11 +339,12 @@ def mutate(chromosome, max_units, max_foods=10, food_data=None, max_per_category
             else:
                 chromosome[i] = (idx, new_units)
      
-    # Add new food item if under max_foods
+    #Recalculate category counts for the mutated chromosome.
     category_counts = {cat: 0 for cat in np.unique(categories)}
     for idx, _ in chromosome:
         category_counts[categories[idx]] += 1
     
+    # Add new food item if under max_foods
     if len(chromosome) < max_foods and np.random.random() < mutation_rate:
         valid_indices = [
             i for i in range(len(food_data))
@@ -396,17 +389,8 @@ def genetic_algorithm(food_data, targets, max_calories, max_foods=10, max_per_ca
         avg_fitness = np.mean(fitness_scores)
         best_fitness_history.append(best_fitness)
         avg_fitness_history.append(avg_fitness)
-        # # Select parents
-        # fitness_sum = sum(fitness_scores)
 
-        # if fitness_sum == 0:
-        #     probabilities = np.ones(population_size) / population_size
-        # else:
-        #     probabilities = [f / fitness_sum for f in fitness_scores]
-    
-        # parent_indices = np.random.choice(range(population_size), size=population_size, p=probabilities)
-        # parents = [population[i].copy() for i in parent_indices]
-        
+        #Select parents
         parents = select_parents(
             population, 
             fitness_scores, 
@@ -485,20 +469,6 @@ def interpret_diet_plan(chromosome, food_data, targets, max_calories, max_foods)
         plan.append((row["Main food description"], units, row["Energy (kcal)"] * units, row["Ultimate Category"]))
     
     return plan, total_nutrients, total_calories
-    # print("\nOptimized Dietary Plan:")
-    # print("----------------------")
-    # for food, units, cals, category in plan:
-    #     print(f"{food}: {units} units ({cals:.1f} kcal) [Category: {category}]")
-    # print(f"\nTotal Calories: {total_calories:.1f} kcal (Max: {max_calories})")
-    # print(f"Unique Categories: {len(set(categories))} ({set(categories)})")
-    # print("\nNutrient Breakdown:")
-    # for nutrient, value in total_nutrients.items():
-    #     target = targets[nutrient]
-    #     if isinstance(target, tuple):
-    #         print(f"{nutrient}: {value:.1f} (Target: {target[0]}-{target[1]})")
-    #     else:
-    #         print(f"{nutrient}: {value:.1f} (Target: {target})")
-    # print(f"\nFitness Score: {calculate_fitness(chromosome, food_data, targets, max_calories,max_foods):.2f}")
 
 # Save top 3 plans to memory
 
@@ -549,13 +519,6 @@ def save_top_3_plans(plans, nutrient_targets):
     
     # print("Top 3 meal plans with nutrient totals and targets saved to memory.")
     #df.to_excel("Top_3_Meal_Plans_with_Totals.xlsx", index=False)
-
-
-# Decaying mutation rate function
-
-
-
-
 
 # Main execution
 def main():
