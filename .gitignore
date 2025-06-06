@@ -1,0 +1,9 @@
+# Project description file
+project_description.md
+
+# VS Code settings
+.vscode/
+
+# Environment variables
+.env
+

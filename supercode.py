@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 
 # Load the dataset
-data = pd.read_csv("Supadupa_data.csv")
+data = pd.read_csv("super_data.csv")
 
 # Verify expected columns
 expected_columns = [
